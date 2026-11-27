@@ -15,6 +15,7 @@ import android.text.SpannableString
 import android.text.Spanned
 import androidx.car.app.Screen
 import androidx.car.app.constraints.ConstraintManager
+import androidx.car.app.model.Action
 import androidx.car.app.model.CarColor
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.ForegroundCarColorSpan
@@ -72,6 +73,13 @@ internal fun VehicleTemplate(tab: State.Tabs.Tab.Displayed, rowLimit: Int = carP
             )
         }
     }
+
+    paneBuilder.addAction(
+        Action.Builder()
+            .setTitle("Odśwież")
+            .setOnClickListener { screen.invalidate() }
+            .build()
+    )
 
     // Header intentionally absent: the same pane is valid inside TabContents.
     return PaneTemplate.Builder(paneBuilder.build()).build()
@@ -136,7 +144,7 @@ private fun StatusPaletteFor(status: WheelStatus): StatusPalette = when (status)
         cardTopBg = 0xFF1F2630.toInt(),
         cardBottomBg = 0xFF151920.toInt(),
         pillBg = 0xFF28313D.toInt(),
-        carColor = CarColor.SECONDARY,
+        carColor = CarColor.DEFAULT,
         badgeText = "● BRAK",
     )
 }
@@ -209,7 +217,7 @@ private fun coloredRowText(
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
         )
         setSpan(
-            ForegroundCarColorSpan.create(CarColor.SECONDARY),
+            ForegroundCarColorSpan.create(CarColor.DEFAULT),
             prefix.length,
             full.length,
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
@@ -337,10 +345,10 @@ private fun renderVehicleDashboard(entries: List<WheelEntry>, currentTime: Doubl
         RectF(434f, 490f, 458f, 572f), // RR
     )
     val cardRects = listOf(
-        RectF(16f, 24f, 236f, 338f),   // FL
-        RectF(484f, 24f, 704f, 338f),  // FR
-        RectF(16f, 382f, 236f, 696f),  // RL
-        RectF(484f, 382f, 704f, 696f), // RR
+        RectF(10f, 20f, 240f, 342f),   // FL
+        RectF(480f, 20f, 710f, 342f),  // FR
+        RectF(10f, 378f, 240f, 700f),  // RL
+        RectF(480f, 378f, 710f, 700f), // RR
     )
 
     // 1. Draw glowing tyres and connectors behind the car silhouette
@@ -650,7 +658,7 @@ private fun drawTyreCard(
     val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = palette.accent
         textAlign = Paint.Align.LEFT
-        textSize = 34f
+        textSize = 36f
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
     }
     canvas.drawText(entry.meta.shortCode, card.left + 26f, card.top + 52f, codePaint)
@@ -675,9 +683,9 @@ private fun drawTyreCard(
         color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFFFFFFF.toInt()
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = if (pressureValue.length <= 4) 76f else 58f
+        textSize = if (pressureValue.length <= 4) 84f else 62f
     }
-    canvas.drawText(pressureValue, card.centerX(), card.top + 150f, pressurePaint)
+    canvas.drawText(pressureValue, card.centerX(), card.top + 152f, pressurePaint)
 
     if (pressureUnit.isNotEmpty()) {
         val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -689,7 +697,7 @@ private fun drawTyreCard(
     }
 
     // Bottom temperature pill
-    val pillRect = RectF(card.left + 20f, card.top + 220f, card.right - 20f, card.bottom - 20f)
+    val pillRect = RectF(card.left + 18f, card.top + 220f, card.right - 18f, card.bottom - 18f)
     val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.pillBg }
     canvas.drawRoundRect(pillRect, 20f, 20f, pillPaint)
 
@@ -704,9 +712,9 @@ private fun drawTyreCard(
         color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFF8FAFC.toInt()
         textAlign = Paint.Align.CENTER
         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = 34f
+        textSize = 38f
     }
-    canvas.drawText(tempText, card.centerX(), pillRect.centerY() + 12f, tempPaint)
+    canvas.drawText(tempText, card.centerX(), pillRect.centerY() + 14f, tempPaint)
 }
 
 private fun drawMiniBattery(
