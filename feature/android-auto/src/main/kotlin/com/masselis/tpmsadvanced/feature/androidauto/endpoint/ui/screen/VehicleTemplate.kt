@@ -320,4 +320,453 @@ private fun renderVehicleDashboard(entries: List<WheelEntry>, currentTime: Doubl
     val canvas = Canvas(bitmap)
 
     // Assign entries to 4 corner slots (0=FL, 1=FR, 2=RL, 3=RR)
-    val slots = arrayOfNulls<WheelEntry>(
+    val slots = arrayOfNulls<WheelEntry>(4)
+    entries.forEach { entry ->
+        if (entry.meta.cornerIndex in 0..3 && slots[entry.meta.cornerIndex] == null) {
+            slots[entry.meta.cornerIndex] = entry
+        } else {
+            val free = slots.indexOfFirst { it == null }
+            if (free != -1) slots[free] = entry
+        }
+    }
+
+    val wheelRects = listOf(
+        RectF(262f, 146f, 286f, 228f), // FL
+        RectF(434f, 146f, 458f, 228f), // FR
+        RectF(262f, 490f, 286f, 572f), // RL
+        RectF(434f, 490f, 458f, 572f), // RR
+    )
+    val cardRects = listOf(
+        RectF(16f, 24f, 236f, 338f),   // FL
+        RectF(484f, 24f, 704f, 338f),  // FR
+        RectF(16f, 382f, 236f, 696f),  // RL
+        RectF(484f, 382f, 704f, 696f), // RR
+    )
+
+    // 1. Draw glowing tyres and connectors behind the car silhouette
+    slots.forEachIndexed { index, entry ->
+        val wheelRect = wheelRects[index]
+        val card = cardRects[index]
+        val status = entry?.let { wheelStatus(it, currentTime) } ?: WheelStatus.MISSING
+        val palette = StatusPaletteFor(status)
+
+        drawTyreWithGlow(canvas, wheelRect, palette.accent, entry != null)
+        if (entry != null) {
+            drawConnector(canvas, card, wheelRect, isLeft = index % 2 == 0, accent = palette.accent)
+        }
+    }
+
+    // 2. Draw sculpted metallic top-down car body in the center
+    drawCarSilhouette(canvas)
+
+    // 3. Draw 4 glowing data cards
+    slots.forEachIndexed { index, entry ->
+        if (entry != null) {
+            val status = wheelStatus(entry, currentTime)
+            drawTyreCard(canvas, cardRects[index], entry, status)
+        }
+    }
+
+    return bitmap
+}
+
+private fun drawTyreWithGlow(canvas: Canvas, rect: RectF, accent: Int, active: Boolean) {
+    if (active) {
+        for (layer in 3 downTo 1) {
+            val pad = layer * 4.5f
+            val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = accent.withAlpha(24 * (4 - layer))
+            }
+            canvas.drawRoundRect(
+                RectF(rect.left - pad, rect.top - pad, rect.right + pad, rect.bottom + pad),
+                10f + pad / 2f, 10f + pad / 2f, glow,
+            )
+        }
+    }
+
+    val rubber = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1B222C.toInt() }
+    canvas.drawRoundRect(rect, 7f, 7f, rubber)
+
+    val tread = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = if (active) accent.withAlpha(140) else 0xFF475569.toInt()
+        strokeWidth = 2.5f
+    }
+    var y = rect.top + 12f
+    while (y < rect.bottom - 10f) {
+        canvas.drawLine(rect.left + 3f, y, rect.right - 3f, y, tread)
+        y += 11f
+    }
+
+    val rim = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = if (active) accent else 0xFF475569.toInt()
+        strokeWidth = 3f
+    }
+    canvas.drawRoundRect(rect, 7f, 7f, rim)
+}
+
+private fun drawConnector(
+    canvas: Canvas,
+    card: RectF,
+    wheel: RectF,
+    isLeft: Boolean,
+    accent: Int,
+) {
+    val startX = if (isLeft) card.right else card.left
+    val endX = if (isLeft) wheel.left else wheel.right
+    val startY = card.centerY()
+    val endY = wheel.centerY()
+    val midX = (startX + endX) / 2f
+
+    val path = Path().apply {
+        moveTo(startX, startY)
+        lineTo(midX, startY)
+        lineTo(endX, endY)
+    }
+
+    val glowLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = accent.withAlpha(80)
+        strokeWidth = 10f
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    canvas.drawPath(path, glowLine)
+
+    val coreLine = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = accent
+        strokeWidth = 3.5f
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    canvas.drawPath(path, coreLine)
+
+    val anchorDot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
+    canvas.drawCircle(endX, endY, 5f, anchorDot)
+}
+
+private fun drawCarSilhouette(canvas: Canvas) {
+    // Ground ambient shadow
+    val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = RadialGradient(
+            360f, 360f, 270f,
+            0x99000000.toInt(), 0x00000000,
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawOval(RectF(254f, 66f, 466f, 654f), shadowPaint)
+
+    // Side mirrors
+    val mirrorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF64748B.toInt() }
+    canvas.drawRoundRect(RectF(264f, 240f, 290f, 260f), 9f, 9f, mirrorPaint)
+    canvas.drawRoundRect(RectF(430f, 240f, 456f, 260f), 9f, 9f, mirrorPaint)
+
+    // Sculpted car body path
+    val bodyPath = Path().apply {
+        moveTo(360f, 84f)
+        cubicTo(404f, 84f, 430f, 102f, 434f, 146f)
+        cubicTo(439f, 260f, 439f, 460f, 434f, 574f)
+        cubicTo(430f, 618f, 408f, 636f, 360f, 636f)
+        cubicTo(312f, 636f, 290f, 618f, 286f, 574f)
+        cubicTo(281f, 460f, 281f, 260f, 286f, 146f)
+        cubicTo(290f, 102f, 316f, 84f, 360f, 84f)
+        close()
+    }
+
+    // Metallic 3D horizontal body shading
+    val bodyFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            282f, 0f, 438f, 0f,
+            intArrayOf(
+                0xFF334155.toInt(),
+                0xFF64748B.toInt(),
+                0xFF94A3B8.toInt(),
+                0xFF64748B.toInt(),
+                0xFF334155.toInt(),
+            ),
+            floatArrayOf(0f, 0.22f, 0.5f, 0.78f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawPath(bodyPath, bodyFill)
+
+    // Subtle hood reflection gradient
+    val hoodHighlight = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            360f, 84f, 360f, 215f,
+            0x44FFFFFF, 0x00FFFFFF,
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawPath(bodyPath, hoodHighlight)
+
+    // Hood crease lines
+    val creasePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x55E2E8F0
+        strokeWidth = 2.5f
+        style = Paint.Style.STROKE
+    }
+    canvas.drawLine(318f, 114f, 326f, 204f, creasePaint)
+    canvas.drawLine(402f, 114f, 394f, 204f, creasePaint)
+
+    // Front windshield
+    val frontGlass = Path().apply {
+        moveTo(302f, 218f)
+        quadTo(360f, 202f, 418f, 218f)
+        lineTo(405f, 296f)
+        quadTo(360f, 286f, 315f, 296f)
+        close()
+    }
+    val glassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            302f, 205f, 418f, 296f,
+            0xFF0F172A.toInt(), 0xFF1E293B.toInt(),
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawPath(frontGlass, glassPaint)
+
+    // Windshield specular sheen
+    val glassSheen = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x26FFFFFF
+        strokeWidth = 10f
+        strokeCap = Paint.Cap.ROUND
+    }
+    canvas.drawLine(322f, 224f, 344f, 282f, glassSheen)
+
+    // Sculpted roof panel
+    val roofRect = RectF(315f, 294f, 405f, 474f)
+    val roofPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            roofRect.left, 0f, roofRect.right, 0f,
+            intArrayOf(0xFF475569.toInt(), 0xFF94A3B8.toInt(), 0xFF475569.toInt()),
+            floatArrayOf(0f, 0.5f, 1f),
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawRoundRect(roofRect, 18f, 18f, roofPaint)
+
+    // Side cabin windows (narrow strips)
+    val sideWindowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF111827.toInt() }
+    canvas.drawRoundRect(RectF(295f, 290f, 311f, 478f), 7f, 7f, sideWindowPaint)
+    canvas.drawRoundRect(RectF(409f, 290f, 425f, 478f), 7f, 7f, sideWindowPaint)
+
+    // Rear window
+    val rearGlass = Path().apply {
+        moveTo(315f, 476f)
+        quadTo(360f, 484f, 405f, 476f)
+        lineTo(414f, 542f)
+        quadTo(360f, 554f, 306f, 542f)
+        close()
+    }
+    canvas.drawPath(rearGlass, glassPaint)
+
+    // Headlight LEDs (front)
+    val headlightGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x77E0F2FE
+        strokeWidth = 10f
+        strokeCap = Paint.Cap.ROUND
+    }
+    val headlightCore = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFF8FAFC.toInt()
+        strokeWidth = 4f
+        strokeCap = Paint.Cap.ROUND
+    }
+    canvas.drawLine(300f, 102f, 326f, 92f, headlightGlow)
+    canvas.drawLine(300f, 102f, 326f, 92f, headlightCore)
+    canvas.drawLine(420f, 102f, 394f, 92f, headlightGlow)
+    canvas.drawLine(420f, 102f, 394f, 92f, headlightCore)
+
+    // Taillight LEDs (rear)
+    val taillightGlow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x88EF4444.toInt()
+        strokeWidth = 10f
+        strokeCap = Paint.Cap.ROUND
+    }
+    val taillightCore = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFF87171.toInt()
+        strokeWidth = 4f
+        strokeCap = Paint.Cap.ROUND
+    }
+    canvas.drawLine(304f, 622f, 336f, 629f, taillightGlow)
+    canvas.drawLine(304f, 622f, 336f, 629f, taillightCore)
+    canvas.drawLine(416f, 622f, 384f, 629f, taillightGlow)
+    canvas.drawLine(416f, 622f, 384f, 629f, taillightCore)
+
+    // Crisp metallic outer rim
+    val bodyStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFCBD5E1.toInt().withAlpha(150)
+        style = Paint.Style.STROKE
+        strokeWidth = 3f
+    }
+    canvas.drawPath(bodyPath, bodyStroke)
+}
+
+private fun drawTyreCard(
+    canvas: Canvas,
+    card: RectF,
+    entry: WheelEntry,
+    status: WheelStatus,
+) {
+    val palette = StatusPaletteFor(status)
+    val radius = 30f
+
+    // Multi-pass soft neon outer glow
+    for (layer in 3 downTo 1) {
+        val spread = layer * 4.5f
+        val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = palette.accent.withAlpha(26 * (4 - layer))
+            strokeWidth = 5f + layer * 3.5f
+        }
+        canvas.drawRoundRect(
+            RectF(card.left - spread / 2f, card.top - spread / 2f, card.right + spread / 2f, card.bottom + spread / 2f),
+            radius + spread / 3f,
+            radius + spread / 3f,
+            glowPaint,
+        )
+    }
+
+    // Dark vertical gradient card fill
+    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        shader = LinearGradient(
+            card.left, card.top, card.left, card.bottom,
+            palette.cardTopBg, palette.cardBottomBg,
+            Shader.TileMode.CLAMP,
+        )
+    }
+    canvas.drawRoundRect(card, radius, radius, bgPaint)
+
+    // Crisp glowing border
+    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = palette.accent
+        style = Paint.Style.STROKE
+        strokeWidth = 5.5f
+    }
+    canvas.drawRoundRect(card, radius, radius, borderPaint)
+
+    // Top-left wheel short code (LP / PP / LT / PT)
+    val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = palette.accent
+        textAlign = Paint.Align.LEFT
+        textSize = 34f
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+    }
+    canvas.drawText(entry.meta.shortCode, card.left + 26f, card.top + 52f, codePaint)
+
+    // Top-right mini battery icon (visual sensor-active indicator)
+    drawMiniBattery(canvas, card.right - 50f, card.top + 24f, palette.accent, status)
+
+    val (pressureValue, pressureUnit, tempText) = when (val s = entry.state) {
+        TyreStatsStateFlow.State.NotDetected -> Triple("--.-", "", "Brak")
+        is TyreStatsStateFlow.State.Normal -> {
+            val parts = s.pressure.string(s.pressureUnit).trim().split(" ", limit = 2)
+            Triple(parts.firstOrNull().orEmpty(), parts.getOrNull(1).orEmpty(), s.temperature.string(s.temperatureUnit))
+        }
+        is TyreStatsStateFlow.State.Alerting -> {
+            val parts = s.pressure.string(s.pressureUnit).trim().split(" ", limit = 2)
+            Triple(parts.firstOrNull().orEmpty(), parts.getOrNull(1).orEmpty(), s.temperature.string(s.temperatureUnit))
+        }
+    }
+
+    // Center big pressure value
+    val pressurePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFFFFFFF.toInt()
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        textSize = if (pressureValue.length <= 4) 76f else 58f
+    }
+    canvas.drawText(pressureValue, card.centerX(), card.top + 150f, pressurePaint)
+
+    if (pressureUnit.isNotEmpty()) {
+        val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = 0xFFCBD5E1.toInt()
+            textAlign = Paint.Align.CENTER
+            textSize = 30f
+        }
+        canvas.drawText(pressureUnit, card.centerX(), card.top + 190f, unitPaint)
+    }
+
+    // Bottom temperature pill
+    val pillRect = RectF(card.left + 20f, card.top + 220f, card.right - 20f, card.bottom - 20f)
+    val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = palette.pillBg }
+    canvas.drawRoundRect(pillRect, 20f, 20f, pillPaint)
+
+    val pillBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = palette.accent.withAlpha(75)
+        strokeWidth = 2f
+    }
+    canvas.drawRoundRect(pillRect, 20f, 20f, pillBorder)
+
+    val tempPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFF8FAFC.toInt()
+        textAlign = Paint.Align.CENTER
+        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        textSize = 34f
+    }
+    canvas.drawText(tempText, card.centerX(), pillRect.centerY() + 12f, tempPaint)
+}
+
+private fun drawMiniBattery(
+    canvas: Canvas,
+    left: Float,
+    top: Float,
+    accent: Int,
+    status: WheelStatus,
+) {
+    val cap = RectF(left + 7f, top, left + 17f, top + 5f)
+    val body = RectF(left, top + 5f, left + 24f, top + 35f)
+    val outlineColor = if (status == WheelStatus.MISSING) 0xFF64748B.toInt() else 0xFFCBD5E1.toInt()
+
+    val capPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = outlineColor }
+    canvas.drawRoundRect(cap, 2f, 2f, capPaint)
+
+    val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = outlineColor
+        strokeWidth = 2.5f
+    }
+    canvas.drawRoundRect(body, 4f, 4f, outlinePaint)
+
+    val fillRatio = when (status) {
+        WheelStatus.OK -> 0.82f
+        WheelStatus.STALE_OR_WARN -> 0.45f
+        WheelStatus.ALERT -> 0.25f
+        WheelStatus.MISSING -> 0f
+    }
+    if (fillRatio > 0f) {
+        val innerHeight = (body.height() - 8f) * fillRatio
+        val fillRect = RectF(
+            body.left + 4f,
+            body.bottom - 4f - innerHeight,
+            body.right - 4f,
+            body.bottom - 4f,
+        )
+        val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = accent }
+        canvas.drawRoundRect(fillRect, 2f, 2f, fillPaint)
+    }
+}
+
+internal fun autoReading(state: TyreStatsStateFlow.State): String = when (state) {
+    TyreStatsStateFlow.State.NotDetected -> "Sensor not detected"
+    is TyreStatsStateFlow.State.Normal ->
+        "${state.pressure.string(state.pressureUnit)} · ${state.temperature.string(state.temperatureUnit)}"
+    is TyreStatsStateFlow.State.Alerting ->
+        "WARNING · ${state.pressure.string(state.pressureUnit)} · ${state.temperature.string(state.temperatureUnit)}"
+}
+
+internal fun autoFreshness(state: TyreStatsStateFlow.State, currentTime: Double): String {
+    val timestamp = when (state) {
+        TyreStatsStateFlow.State.NotDetected -> return "Assign or wake sensor while parked"
+        is TyreStatsStateFlow.State.Normal -> state.timestamp
+        is TyreStatsStateFlow.State.Alerting -> state.timestamp
+    }
+    val age = currentTime - timestamp
+    return when {
+        timestamp <= 0 || age < 0 -> "Freshness unconfirmed"
+        age > 120 -> "STALE · last seen ${(age / 60).toInt()} min ago"
+        else -> "Last seen ${age.toInt()}s ago"
+    }
+}
