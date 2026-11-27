@@ -217,5 +217,13 @@ internal class BluetoothLeScannerImpl(
         )
 
         private val MANUFACTURER_IDS = emptyList<Int>()
+                private val SERVICES = listOf(
+            RawSysgration.SERVICE_UUID,
+            RawPecham.SERVICE_UUID,
+            RawWicarlink.SERVICE_UUID,
+            RawBekubeeKy.SERVICE_UUID,
+            RawBekubeeTpms.SERVICE_UUID,
+            RawDjtpms.SERVICE_UUID
+        )
     }
 }
