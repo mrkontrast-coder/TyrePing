@@ -7,7 +7,7 @@ import co.touchlab.kermit.Logger
 @Suppress("TooGenericExceptionCaught") // Packet decoders index byte arrays; reject truncated input.
 internal fun decodeAdvertisement(result: ScanResult): Raw? = try {
     RawPecham(result) ?: RawBekubeeKy(result) ?: RawWicarlink(result) ?:
-        RawBekubeeTpms(result) ?: RawSysgration(result)
+        RawBekubeeTpms(result) ?: RawSysgration(result) ?: RawDjtpms(result)
 } catch (cause: IndexOutOfBoundsException) {
     Logger.withTag("BluetoothLeScannerImpl").w("Truncated TPMS packet", cause)
     null
@@ -15,7 +15,3 @@ internal fun decodeAdvertisement(result: ScanResult): Raw? = try {
     Logger.withTag("BluetoothLeScannerImpl").w("Invalid TPMS packet", cause)
     null
 }
-internal fun decodeAdvertisement(result: ScanResult): Raw? = try {
-    RawPecham(result) ?: RawBekubeeKy(result) ?: RawWicarlink(result) ?:
-        RawBekubeeTpms(result) ?: RawSysgration(result) ?: RawDjtpms(result)
-} catch (cause: IndexOutOfBoundsException) {
