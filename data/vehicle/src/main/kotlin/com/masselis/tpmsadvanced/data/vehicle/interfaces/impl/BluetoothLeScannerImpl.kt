@@ -213,7 +213,7 @@ internal class BluetoothLeScannerImpl(
             RawPecham.SERVICE_UUID,
             RawWicarlink.SERVICE_UUID,
             RawBekubeeKy.SERVICE_UUID,
-            RawBekubeeTpms.SERVICE_UUID
+            RawBekubeeTpms.SERVICE_UUID,
             RawDjtpms.SERVICE_UUID
         )
 
