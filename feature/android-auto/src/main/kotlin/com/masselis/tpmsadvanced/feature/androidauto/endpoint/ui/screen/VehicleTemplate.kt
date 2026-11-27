@@ -5,12 +5,16 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.text.SpannableString
+import android.text.Spanned
 import androidx.car.app.Screen
 import androidx.car.app.constraints.ConstraintManager
+import androidx.car.app.model.CarColor
 import androidx.car.app.model.CarIcon
-import androidx.car.app.model.GridItem
-import androidx.car.app.model.GridTemplate
-import androidx.car.app.model.ItemList
+import androidx.car.app.model.ForegroundCarColorSpan
+import androidx.car.app.model.Pane
+import androidx.car.app.model.PaneTemplate
+import androidx.car.app.model.Row
 import androidx.core.graphics.drawable.IconCompat
 import com.masselis.tpmsadvanced.core.common.now
 import com.masselis.tpmsadvanced.feature.androidauto.endpoint.ui.viewmodel.TabScreenViewModel.State
@@ -18,53 +22,66 @@ import com.masselis.tpmsadvanced.feature.main.interfaces.composable.appendLoc
 import com.masselis.tpmsadvanced.feature.main.usecase.FleetHealth
 import com.masselis.tpmsadvanced.feature.main.usecase.TyreStatsStateFlow
 
-/** Stable item titles/counts allow value refreshes without consuming the host's navigation quota. */
+/** Stable row titles/counts allow value refreshes without consuming the host's navigation quota. */
 context(screen: Screen)
 @Suppress("FunctionName", "FunctionNaming", "MagicNumber")
-internal fun VehicleTemplate(tab: State.Tabs.Tab.Displayed, rowLimit: Int = carGridLimit()): GridTemplate {
+internal fun VehicleTemplate(tab: State.Tabs.Tab.Displayed, rowLimit: Int = carPaneLimit()): PaneTemplate {
     val limit = rowLimit.coerceAtLeast(1)
     val health = FleetHealth.values.value.firstOrNull { it.vehicle.uuid == tab.vehicle.uuid }
     val currentTime = now()
-    val items = ItemList.Builder()
 
-    tab.vehicle.kind.locations.take(limit).forEach { location ->
+    val entries = tab.vehicle.kind.locations.map { location ->
         val state = tab.tyres[location]?.second ?: TyreStatsStateFlow.State.NotDetected
         val wheel = health?.wheels?.firstOrNull { it.location == location }
         val rawLabel = buildString { appendLoc(location, false, capitalized = true) }
-        val meta = wheelMeta(rawLabel)
-        val bitmap = renderTyreCard(
-            meta = meta,
+        WheelEntry(
+            meta = wheelMeta(rawLabel),
             state = state,
-            currentTime = currentTime,
             hasWarning = wheel?.warnings?.isNotEmpty() == true,
-        )
-        val icon = CarIcon.Builder(IconCompat.createWithBitmap(bitmap)).build()
-
-        items.addItem(
-            GridItem.Builder()
-                .setTitle(meta.title)
-                .setText(cardSubtitle(state, currentTime, wheel?.warnings?.firstOrNull()))
-                .setImage(icon, GridItem.IMAGE_TYPE_LARGE)
-                .build()
         )
     }
 
-    // Header intentionally absent: the same grid is valid inside TabContents.
-    return GridTemplate.Builder().setSingleList(items.build()).build()
+    val carBitmap = renderVehicleDashboard(entries, currentTime)
+    val paneBuilder = Pane.Builder()
+        .setImage(CarIcon.Builder(IconCompat.createWithBitmap(carBitmap)).build())
+
+    if (entries.isEmpty()) {
+        paneBuilder.addRow(Row.Builder().setTitle("Brak przypisanych kół").build())
+    } else {
+        entries.take(limit).forEach { entry ->
+            paneBuilder.addRow(
+                Row.Builder()
+                    .setTitle(entry.meta.title)
+                    .addText(coloredRowText(entry, currentTime))
+                    .build()
+            )
+        }
+    }
+
+    // Header intentionally absent: the same pane is valid inside TabContents.
+    return PaneTemplate.Builder(paneBuilder.build()).build()
 }
 
 context(screen: Screen)
 @Suppress("MagicNumber")
-private fun carGridLimit(): Int = runCatching {
+private fun carPaneLimit(): Int = runCatching {
     screen.carContext.getCarService(ConstraintManager::class.java)
-        .getContentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_GRID)
-}.getOrDefault(6)
+        .getContentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_PANE)
+}.getOrDefault(4)
 
 private data class WheelMeta(
     val shortCode: String,
     val title: String,
     val cornerIndex: Int, // 0=FL, 1=FR, 2=RL, 3=RR, -1=other
 )
+
+private data class WheelEntry(
+    val meta: WheelMeta,
+    val state: TyreStatsStateFlow.State,
+    val hasWarning: Boolean,
+)
+
+private enum class WheelStatus { OK, STALE_OR_WARN, ALERT, MISSING }
 
 private fun wheelMeta(rawLabel: String): WheelMeta {
     val lower = rawLabel.lowercase()
@@ -80,172 +97,208 @@ private fun wheelMeta(rawLabel: String): WheelMeta {
 }
 
 @Suppress("MagicNumber")
-private fun cardSubtitle(
-    state: TyreStatsStateFlow.State,
-    currentTime: Double,
-    warning: String?,
-): String {
-    if (state is TyreStatsStateFlow.State.NotDetected) return "Brak czujnika"
-    val timestamp = when (state) {
-        is TyreStatsStateFlow.State.Normal -> state.timestamp
-        is TyreStatsStateFlow.State.Alerting -> state.timestamp
-        TyreStatsStateFlow.State.NotDetected -> 0.0
-    }
+private fun wheelStatus(entry: WheelEntry, currentTime: Double): WheelStatus {
+    val state = entry.state
+    if (state is TyreStatsStateFlow.State.Alerting) return WheelStatus.ALERT
+    if (state is TyreStatsStateFlow.State.NotDetected) return WheelStatus.MISSING
+    val timestamp = (state as TyreStatsStateFlow.State.Normal).timestamp
     val age = currentTime - timestamp
-    val freshness = when {
-        timestamp <= 0 || age < 0 -> "Oczekiwanie"
-        age > 120 -> "Stare · ${(age / 60).toInt()} min"
-        else -> "${age.toInt()}s temu"
+    return if (timestamp <= 0 || age > 120 || entry.hasWarning) {
+        WheelStatus.STALE_OR_WARN
+    } else {
+        WheelStatus.OK
     }
+}
+
+@Suppress("MagicNumber")
+private fun coloredRowText(entry: WheelEntry, currentTime: Double): CharSequence {
+    val status = wheelStatus(entry, currentTime)
+    val state = entry.state
+    val text = when (state) {
+        TyreStatsStateFlow.State.NotDetected -> "Brak sygnału"
+        is TyreStatsStateFlow.State.Normal -> {
+            val ageText = formatAge(state.timestamp, currentTime)
+            "${state.pressure.string(state.pressureUnit)} · ${state.temperature.string(state.temperatureUnit)} · $ageText"
+        }
+        is TyreStatsStateFlow.State.Alerting -> {
+            val ageText = formatAge(state.timestamp, currentTime)
+            "ALARM · ${state.pressure.string(state.pressureUnit)} · ${state.temperature.string(state.temperatureUnit)} · $ageText"
+        }
+    }
+    val color = when (status) {
+        WheelStatus.OK -> CarColor.GREEN
+        WheelStatus.STALE_OR_WARN -> CarColor.YELLOW
+        WheelStatus.ALERT -> CarColor.RED
+        WheelStatus.MISSING -> CarColor.SECONDARY
+    }
+    return SpannableString(text).apply {
+        setSpan(ForegroundCarColorSpan.create(color), 0, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+    }
+}
+
+@Suppress("MagicNumber")
+private fun formatAge(timestamp: Double, currentTime: Double): String {
+    val age = currentTime - timestamp
     return when {
-        state is TyreStatsStateFlow.State.Alerting -> "ALARM · $freshness"
-        warning != null -> "Uwaga · $freshness"
-        else -> freshness
+        timestamp <= 0 || age < 0 -> "?"
+        age > 120 -> "${(age / 60).toInt()} min"
+        else -> "${age.toInt()}s"
     }
 }
 
 @Suppress("MagicNumber", "LongMethod")
-private fun renderTyreCard(
-    meta: WheelMeta,
-    state: TyreStatsStateFlow.State,
-    currentTime: Double,
-    hasWarning: Boolean,
-): Bitmap {
-    val size = 320
+private fun renderVehicleDashboard(entries: List<WheelEntry>, currentTime: Double): Bitmap {
+    val size = 640
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
 
-    val isAlert = state is TyreStatsStateFlow.State.Alerting
-    val isMissing = state is TyreStatsStateFlow.State.NotDetected
-    val timestamp = when (state) {
-        is TyreStatsStateFlow.State.Normal -> state.timestamp
-        is TyreStatsStateFlow.State.Alerting -> state.timestamp
-        TyreStatsStateFlow.State.NotDetected -> 0.0
-    }
-    val age = currentTime - timestamp
-    val isStale = !isMissing && (timestamp <= 0 || age > 120)
-
-    val accentColor: Int
-    val cardBgColor: Int
-    val pillBgColor: Int
-    when {
-        isAlert -> {
-            accentColor = 0xFFEF4444.toInt()
-            cardBgColor = 0xFF2B1416.toInt()
-            pillBgColor = 0xFF471A1E.toInt()
-        }
-        isMissing -> {
-            accentColor = 0xFF64748B.toInt()
-            cardBgColor = 0xFF1A1F26.toInt()
-            pillBgColor = 0xFF262D37.toInt()
-        }
-        isStale || hasWarning -> {
-            accentColor = 0xFFF59E0B.toInt()
-            cardBgColor = 0xFF241E14.toInt()
-            pillBgColor = 0xFF3B2F1A.toInt()
-        }
-        else -> {
-            accentColor = 0xFF22C55E.toInt()
-            cardBgColor = 0xFF15201A.toInt()
-            pillBgColor = 0xFF1E3527.toInt()
+    // Assign entries to 4 corner slots (0=FL, 1=FR, 2=RL, 3=RR)
+    val slots = arrayOfNulls<WheelEntry>(4)
+    entries.forEach { entry ->
+        if (entry.meta.cornerIndex in 0..3 && slots[entry.meta.cornerIndex] == null) {
+            slots[entry.meta.cornerIndex] = entry
+        } else {
+            val free = slots.indexOfFirst { it == null }
+            if (free != -1) slots[free] = entry
         }
     }
 
-    val cardRect = RectF(8f, 8f, size - 8f, size - 8f)
-    val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = cardBgColor
+    // Center top-down car silhouette
+    val bodyFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF232933.toInt()
         style = Paint.Style.FILL
     }
-    val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = accentColor
+    val bodyStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF64748B.toInt()
         style = Paint.Style.STROKE
-        strokeWidth = 8f
+        strokeWidth = 5f
     }
-    canvas.drawRoundRect(cardRect, 36f, 36f, bgPaint)
-    canvas.drawRoundRect(cardRect, 36f, 36f, borderPaint)
-
-    // Top-left wheel code (LP, PP, LT, PT)
-    val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = accentColor
-        textSize = 34f
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-    canvas.drawText(meta.shortCode, 34f, 66f, codePaint)
-
-    // Top-right mini car silhouette with highlighted active wheel
-    if (meta.cornerIndex in 0..3) {
-        val chassisPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF64748B.toInt()
-            style = Paint.Style.STROKE
-            strokeWidth = 3.5f
-        }
-        canvas.drawRoundRect(RectF(245f, 30f, 275f, 82f), 10f, 10f, chassisPaint)
-
-        val wheelRects = listOf(
-            RectF(234f, 35f, 243f, 52f), // FL
-            RectF(277f, 35f, 286f, 52f), // FR
-            RectF(234f, 60f, 243f, 77f), // RL
-            RectF(277f, 60f, 286f, 77f), // RR
-        )
-        val wheelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-        wheelRects.forEachIndexed { index, rect ->
-            wheelPaint.color = if (index == meta.cornerIndex) accentColor else 0xFF475569.toInt()
-            canvas.drawRoundRect(rect, 3f, 3f, wheelPaint)
-        }
-    }
-
-    // Center pressure value & unit
-    val (pressureValue, pressureUnit, tempText) = when (state) {
-        TyreStatsStateFlow.State.NotDetected -> Triple("--.-", "", "Brak sygnału")
-        is TyreStatsStateFlow.State.Normal -> {
-            val parts = state.pressure.string(state.pressureUnit).trim().split(" ", limit = 2)
-            Triple(
-                parts.firstOrNull().orEmpty(),
-                parts.getOrNull(1).orEmpty(),
-                state.temperature.string(state.temperatureUnit),
-            )
-        }
-        is TyreStatsStateFlow.State.Alerting -> {
-            val parts = state.pressure.string(state.pressureUnit).trim().split(" ", limit = 2)
-            Triple(
-                parts.firstOrNull().orEmpty(),
-                parts.getOrNull(1).orEmpty(),
-                state.temperature.string(state.temperatureUnit),
-            )
-        }
-    }
-
-    val pressurePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (isMissing) 0xFF94A3B8.toInt() else 0xFFFFFFFF.toInt()
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = if (pressureValue.length <= 4) 84f else 66f
-    }
-    canvas.drawText(pressureValue, size / 2f, 178f, pressurePaint)
-
-    if (pressureUnit.isNotEmpty()) {
-        val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFFCBD5E1.toInt()
-            textAlign = Paint.Align.CENTER
-            textSize = 28f
-        }
-        canvas.drawText(pressureUnit, size / 2f, 214f, unitPaint)
-    }
-
-    // Bottom temperature pill
-    val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = pillBgColor
+    val glassPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF334155.toInt()
         style = Paint.Style.FILL
     }
-    canvas.drawRoundRect(RectF(36f, 236f, size - 36f, 290f), 24f, 24f, pillPaint)
 
-    val tempPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (isMissing) 0xFF94A3B8.toInt() else 0xFFF8FAFC.toInt()
-        textAlign = Paint.Align.CENTER
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        textSize = 30f
+    canvas.drawRoundRect(RectF(266f, 70f, 374f, 570f), 44f, 44f, bodyFill)
+    canvas.drawRoundRect(RectF(266f, 70f, 374f, 570f), 44f, 44f, bodyStroke)
+    canvas.drawRoundRect(RectF(282f, 150f, 358f, 224f), 16f, 16f, glassPaint) // front windshield
+    canvas.drawRoundRect(RectF(286f, 435f, 354f, 488f), 14f, 14f, glassPaint) // rear window
+
+    val wheelRects = listOf(
+        RectF(246f, 125f, 264f, 215f), // FL
+        RectF(376f, 125f, 394f, 215f), // FR
+        RectF(246f, 425f, 264f, 515f), // RL
+        RectF(376f, 425f, 394f, 515f), // RR
+    )
+    val cardRects = listOf(
+        RectF(8f, 32f, 228f, 300f),   // FL
+        RectF(412f, 32f, 632f, 300f), // FR
+        RectF(8f, 340f, 228f, 608f),  // RL
+        RectF(412f, 340f, 632f, 608f),// RR
+    )
+
+    slots.forEachIndexed { index, entry ->
+        val wheelRect = wheelRects[index]
+        val wheelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+        if (entry == null) {
+            wheelPaint.color = 0xFF475569.toInt()
+            canvas.drawRoundRect(wheelRect, 6f, 6f, wheelPaint)
+            return@forEachIndexed
+        }
+
+        val status = wheelStatus(entry, currentTime)
+        val (accent, cardBg, pillBg) = when (status) {
+            WheelStatus.ALERT -> Triple(0xFFEF4444.toInt(), 0xFF2B1416.toInt(), 0xFF471A1E.toInt())
+            WheelStatus.MISSING -> Triple(0xFF64748B.toInt(), 0xFF1A1F26.toInt(), 0xFF262D37.toInt())
+            WheelStatus.STALE_OR_WARN -> Triple(0xFFF59E0B.toInt(), 0xFF241E14.toInt(), 0xFF3B2F1A.toInt())
+            WheelStatus.OK -> Triple(0xFF22C55E.toInt(), 0xFF15201A.toInt(), 0xFF1E3527.toInt())
+        }
+
+        // Highlight wheel & connector line
+        wheelPaint.color = accent
+        canvas.drawRoundRect(wheelRect, 6f, 6f, wheelPaint)
+
+        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+            strokeWidth = 5f
+        }
+        val card = cardRects[index]
+        val isLeft = index % 2 == 0
+        val lineY = wheelRect.centerY()
+        if (isLeft) {
+            canvas.drawLine(card.right, lineY, wheelRect.left, lineY, linePaint)
+        } else {
+            canvas.drawLine(wheelRect.right, lineY, card.left, lineY, linePaint)
+        }
+
+        // Card container
+        val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = cardBg
+            style = Paint.Style.FILL
+        }
+        val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+            style = Paint.Style.STROKE
+            strokeWidth = 7f
+        }
+        canvas.drawRoundRect(card, 28f, 28f, bgPaint)
+        canvas.drawRoundRect(card, 28f, 28f, borderPaint)
+
+        // Wheel short code (LP / PP / LT / PT)
+        val codePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = accent
+            textAlign = Paint.Align.CENTER
+            textSize = 32f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText(entry.meta.shortCode, card.centerX(), card.top + 46f, codePaint)
+
+        val (pressureValue, pressureUnit, tempText) = when (val s = entry.state) {
+            TyreStatsStateFlow.State.NotDetected -> Triple("--.-", "", "Brak")
+            is TyreStatsStateFlow.State.Normal -> {
+                val parts = s.pressure.string(s.pressureUnit).trim().split(" ", limit = 2)
+                Triple(parts.firstOrNull().orEmpty(), parts.getOrNull(1).orEmpty(), s.temperature.string(s.temperatureUnit))
+            }
+            is TyreStatsStateFlow.State.Alerting -> {
+                val parts = s.pressure.string(s.pressureUnit).trim().split(" ", limit = 2)
+                Triple(parts.firstOrNull().orEmpty(), parts.getOrNull(1).orEmpty(), s.temperature.string(s.temperatureUnit))
+            }
+        }
+
+        // Big pressure value
+        val pressurePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFFFFFFF.toInt()
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = if (pressureValue.length <= 4) 74f else 56f
+        }
+        canvas.drawText(pressureValue, card.centerX(), card.top + 132f, pressurePaint)
+
+        if (pressureUnit.isNotEmpty()) {
+            val unitPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = 0xFFCBD5E1.toInt()
+                textAlign = Paint.Align.CENTER
+                textSize = 28f
+            }
+            canvas.drawText(pressureUnit, card.centerX(), card.top + 168f, unitPaint)
+        }
+
+        // Temperature pill
+        val pillRect = RectF(card.left + 20f, card.top + 190f, card.right - 20f, card.bottom - 20f)
+        val pillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = pillBg
+            style = Paint.Style.FILL
+        }
+        canvas.drawRoundRect(pillRect, 20f, 20f, pillPaint)
+
+        val tempPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = if (status == WheelStatus.MISSING) 0xFF94A3B8.toInt() else 0xFFF8FAFC.toInt()
+            textAlign = Paint.Align.CENTER
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            textSize = 32f
+        }
+        canvas.drawText(tempText, card.centerX(), card.top + 232f, tempPaint)
     }
-    canvas.drawText(tempText, size / 2f, 274f, tempPaint)
 
     return bitmap
 }
