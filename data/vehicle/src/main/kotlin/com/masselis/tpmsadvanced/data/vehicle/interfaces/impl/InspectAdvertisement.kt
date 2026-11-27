@@ -20,16 +20,13 @@ internal fun inspectAdvertisement(result: ScanResult): BleAdvertisement {
     val reading = decoded?.second
     val tyre = reading as? com.masselis.tpmsadvanced.data.vehicle.model.Tyre
     val quality = buildList {
-        if (decoded == null && listOf(RawPecham.SERVICE_UUID, RawBekubeeKy.SERVICE_UUID,
-                RawBekubeeTpms.SERVICE_UUID, RawSysgration.SERVICE_UUID, RawWicarlink.SERVICE_UUID)
+                if (decoded == null && listOf(RawPecham.SERVICE_UUID, RawBekubeeKy.SERVICE_UUID,
+                RawBekubeeTpms.SERVICE_UUID, RawSysgration.SERVICE_UUID, RawWicarlink.SERVICE_UUID,
+                RawDjtpms.SERVICE_UUID)
                 .any { record?.serviceUuids?.contains(it) == true })
             add("Possible TPMS packet could not be decoded: unsupported, malformed or checksum failure")
         if (tyre != null) addAll(com.masselis.tpmsadvanced.data.vehicle.model.suspiciousReading(
             tyre.pressure.kpa, tyre.temperature.celsius, tyre.sensorBattery))
-        if (decoded == null && listOf(RawPecham.SERVICE_UUID, RawBekubeeKy.SERVICE_UUID,
-                RawBekubeeTpms.SERVICE_UUID, RawSysgration.SERVICE_UUID, RawWicarlink.SERVICE_UUID,
-                RawDjtpms.SERVICE_UUID)
-                .any { record?.serviceUuids?.contains(it) == true })
     }
     // Non-finite fields cannot be stored as a usable reading. Their packet and explicit warning remain visible.
     val usable = reading.takeUnless { tyre != null &&
@@ -50,14 +47,6 @@ internal fun inspectAdvertisement(result: ScanResult): BleAdvertisement {
 }
 
 /** Stable in minified release builds as well as debug builds. */
-private fun Raw.protocolName(): String = when (this) {
-    is RawBekubeeTpms -> "Bekubee TPMS (A827)"
-    is RawBekubeeKy -> "Bekubee KY (27A5)"
-    is RawPecham -> "Pecham BR"
-    is RawWicarlink -> "Wicarlink / LYTPMS"
-    is RawSysgration -> "Sysgration"
-    else -> "TPMS"
-}
 private fun Raw.protocolName(): String = when (this) {
     is RawBekubeeTpms -> "Bekubee TPMS (A827)"
     is RawBekubeeKy -> "Bekubee KY (27A5)"
